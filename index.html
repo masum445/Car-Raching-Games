@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>3D Car Game with Random Missions</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #87CEEB; }
+    #ui {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      color: white;
+      font-family: Arial, sans-serif;
+      font-size: 18px;
+      background: rgba(0,0,0,0.5);
+      padding: 10px;
+      border-radius: 8px;
+      user-select: none;
+      z-index: 10;
+    }
+    #missionStatus {
+      margin-top: 10px;
+      font-weight: bold;
+      color: #00ff00;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    Score: <span id="score">0</span><br />
+    Time: <span id="time">0</span>s<br />
+    Fuel: <span id="fuel">100</span>%<br />
+    <div id="missionStatus"></div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.module.js';
+
+    let scene, camera, renderer, car, wheels = [];
+    let keys = {};
+    let score = 0;
+    let time = 0;
+    let clock = new THREE.Clock();
+
+    // ✅ Random Missions System
+    const missions = [
+      { distance: 300, message: "Reach 300 meters!" },
+      { distance: 500, message: "Go for 500 meters!" },
+      { distance: 750, message: "Challenge: 750 meters!" },
+      { distance: 1000, message: "Ultimate goal: 1000 meters!" }
+    ];
+    let currentMission = null;
+    let missionCompleted = false;
+
+    // Fuel system
+    let fuel = 100;
+    const fuelRefillAmount = 100;
+    let lastFuelDecreaseTime = 0;
+
+    const roadHalfWidth = 3;
+    const gasStationPosition = new THREE.Vector3(roadHalfWidth + 5, 0, -200);
+    let miniMapCamera, miniMapWidth = 200, miniMapHeight = 150;
+
+    init();
+    animate();
+
+    function init() {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x87CEEB);
+
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+      camera.position.set(0, 5, 10);
+
+      renderer = new THREE.WebGLRenderer({antialias: true});
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      document.body.appendChild(renderer.domElement);
+
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+      directionalLight.position.set(5, 20, 10);
+      directionalLight.castShadow = true;
+      directionalLight.shadow.mapSize.width = 2048;
+      directionalLight.shadow.mapSize.height = 2048;
+      directionalLight.shadow.camera.left = -30;
+      directionalLight.shadow.camera.right = 30;
+      directionalLight.shadow.camera.top = 30;
+      directionalLight.shadow.camera.bottom = -30;
+      directionalLight.shadow.camera.near = 1;
+      directionalLight.shadow.camera.far = 50;
+      scene.add(directionalLight);
+
+      const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+      scene.add(ambientLight);
+
+      const roadTexture = createRoadTexture();
+      roadTexture.wrapS = THREE.RepeatWrapping;
+      roadTexture.wrapT = THREE.RepeatWrapping;
+      roadTexture.repeat.set(1, 100);
+
+      const roadMaterial = new THREE.MeshStandardMaterial({ map: roadTexture });
+      const roadGeometry = new THREE.PlaneGeometry(6, 1000);
+      const road = new THREE.Mesh(roadGeometry, roadMaterial);
+      road.rotation.x = -Math.PI / 2;
+      road.receiveShadow = true;
+      scene.add(road);
+
+      const grassMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
+      const grassLeft = new THREE.Mesh(new THREE.PlaneGeometry(50, 1000), grassMaterial);
+      grassLeft.rotation.x = -Math.PI / 2;
+      grassLeft.position.x = -30;
+      grassLeft.receiveShadow = true;
+      scene.add(grassLeft);
+
+      const grassRight = grassLeft.clone();
+      grassRight.position.x = 30;
+      scene.add(grassRight);
+
+      car = new THREE.Group();
+
+      const bodyGeometry = new THREE.BoxGeometry(1.5, 0.5, 3);
+      const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xff3333 });
+      const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+      body.position.y = 0.5;
+      body.castShadow = true;
+      car.add(body);
+
+      const topGeometry = new THREE.BoxGeometry(1.2, 0.4, 1.5);
+      const topMaterial = new THREE.MeshStandardMaterial({ color: 0xff9999 });
+      const top = new THREE.Mesh(topGeometry, topMaterial);
+      top.position.set(0, 0.9, -0.2);
+      top.castShadow = true;
+      car.add(top);
+
+      const wheelGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.4, 16);
+      const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x000000 });
+
+      function createWheel(x, z) {
+        const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
+        wheel.rotation.z = Math.PI / 2;
+        wheel.position.set(x, 0.2, z);
+        wheel.castShadow = true;
+        car.add(wheel);
+        wheels.push(wheel);
+      }
+
+      createWheel(0.75, 1.2);
+      createWheel(-0.75, 1.2);
+      createWheel(0.75, -1.2);
+      createWheel(-0.75, -1.2);
+
+      car.position.y = 0.2;
+      scene.add(car);
+
+      for (let i = 0; i < 50; i++) {
+        const xOffset = 5 + Math.random() * 3;
+        const zPos = -i * 20;
+        addImprovedTree(-xOffset, zPos);
+        addImprovedTree(xOffset, zPos);
+      }
+
+      function addImprovedTree(x, z) {
+        const trunk = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.15, 0.15, 2, 12),
+          new THREE.MeshStandardMaterial({ color: 0x8B4513 })
+        );
+        trunk.position.set(x, 1, z);
+        trunk.castShadow = true;
+
+        const foliageMaterial = new THREE.MeshStandardMaterial({ color: 0x006400 });
+        const foliage1 = new THREE.Mesh(new THREE.SphereGeometry(0.7, 8, 8), foliageMaterial);
+        foliage1.position.set(x, 2.3, z);
+        foliage1.castShadow = true;
+
+        const foliage2 = new THREE.Mesh(new THREE.SphereGeometry(0.6, 8, 8), foliageMaterial);
+        foliage2.position.set(x + 0.5, 2.0, z + 0.2);
+        foliage2.castShadow = true;
+
+        const foliage3 = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 8), foliageMaterial);
+        foliage3.position.set(x - 0.4, 1.9, z - 0.3);
+        foliage3.castShadow = true;
+
+        scene.add(trunk, foliage1, foliage2, foliage3);
+      }
+
+      for (let i = 0; i < 20; i++) {
+        const xOffset = 15 + Math.random() * 10;
+        const zPos = -i * 50 - 20;
+        addBuilding(-xOffset, zPos);
+        addBuilding(xOffset, zPos);
+      }
+
+      function addBuilding(x, z) {
+        const buildingHeight = 8 + Math.random() * 5;
+        const building = new THREE.Mesh(
+          new THREE.BoxGeometry(4, buildingHeight, 4),
+          new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.8 })
+        );
+        building.position.set(x, buildingHeight / 2, z);
+        building.castShadow = true;
+        scene.add(building);
+      }
+
+      const gasStation = new THREE.Mesh(
+        new THREE.BoxGeometry(2, 1, 2),
+        new THREE.MeshStandardMaterial({ color: 0x00ff00 })
+      );
+      gasStation.position.copy(gasStationPosition);
+      gasStation.position.y = 0.5;
+      gasStation.castShadow = true;
+      scene.add(gasStation);
+
+      const aspect = miniMapWidth / miniMapHeight;
+      const d = 20;
+      miniMapCamera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 0.1, 1000);
+      miniMapCamera.position.set(0, 50, 0);
+      miniMapCamera.lookAt(0, 0, 0);
+      miniMapCamera.up.set(0, 0, -1);
+
+      setupBackgroundMusic();
+
+      window.addEventListener('resize', onWindowResize);
+      window.addEventListener('keydown', e => keys[e.key] = true);
+      window.addEventListener('keyup', e => keys[e.key] = false);
+
+      // ✅ Random Mission Selection
+      currentMission = missions[Math.floor(Math.random() * missions.length)];
+      document.getElementById('missionStatus').textContent = "Mission: " + currentMission.message;
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      let delta = clock.getDelta();
+      time += delta;
+
+      if (time - lastFuelDecreaseTime >= 180 && fuel > 0) {
+        fuel -= 1;
+        if (fuel < 0) fuel = 0;
+        lastFuelDecreaseTime = time;
+      }
+
+      document.getElementById('time').textContent = Math.floor(time);
+
+      if (!missionCompleted) handleControls(delta);
+      updateScore();
+      checkMission();
+      updateFuelUI();
+
+      if (keys['ArrowUp'] || keys['ArrowDown']) {
+        const rotationAmount = (keys['ArrowUp'] ? -1 : 1) * 10 * delta;
+        wheels.forEach(wheel => wheel.rotation.x += rotationAmount);
+      }
+
+      camera.position.z = car.position.z + 10;
+      camera.position.x = car.position.x;
+      camera.lookAt(car.position);
+
+      renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+      renderer.render(scene, camera);
+
+      miniMapCamera.position.x = car.position.x;
+      miniMapCamera.position.z = car.position.z;
+      miniMapCamera.lookAt(car.position.x, 0, car.position.z);
+      renderer.setViewport(10, 10, miniMapWidth, miniMapHeight);
+      renderer.setScissor(10, 10, miniMapWidth, miniMapHeight);
+      renderer.setScissorTest(true);
+      renderer.render(scene, miniMapCamera);
+      renderer.setScissorTest(false);
+    }
+
+    function handleControls(delta) {
+      if (fuel <= 0) return;
+      const moveSpeed = 10 * delta;
+
+      if (keys['ArrowUp']) car.position.z -= moveSpeed;
+      if (keys['ArrowDown']) car.position.z += moveSpeed;
+      if (keys['ArrowLeft']) car.position.x -= moveSpeed;
+      if (keys['ArrowRight']) car.position.x += moveSpeed;
+
+      car.position.x = Math.max(-roadHalfWidth, Math.min(roadHalfWidth, car.position.x));
+
+      if (car.position.distanceTo(gasStationPosition) < 3) fuel = fuelRefillAmount;
+    }
+
+    function updateScore() {
+      score = Math.max(score, Math.floor(-car.position.z));
+      document.getElementById('score').textContent = score;
+    }
+
+    function checkMission() {
+      if (!missionCompleted && -car.position.z >= currentMission.distance) {
+        missionCompleted = true;
+        document.getElementById('missionStatus').textContent = "Mission Complete! 🚗🎉";
+      }
+    }
+
+    function updateFuelUI() {
+      document.getElementById('fuel').textContent = fuel.toFixed(0);
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function setupBackgroundMusic() {
+      const listener = new THREE.AudioListener();
+      camera.add(listener);
+      const sound = new THREE.Audio(listener);
+      const audioLoader = new THREE.AudioLoader();
+      audioLoader.load('https://cdn.pixabay.com/download/audio/2022/03/23/audio_d8f9c16ee9.mp3?filename=relaxing-background-music-3-7205.mp3', function(buffer){
+        sound.setBuffer(buffer);
+        sound.setLoop(true);
+        sound.setVolume(0.5);
+        sound.play();
+      });
+    }
+
+    function createRoadTexture() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#222222';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 6;
+      ctx.setLineDash([20, 20]);
+      ctx.beginPath();
+      ctx.moveTo(canvas.width / 2, 0);
+      ctx.lineTo(canvas.width / 2, canvas.height);
+      ctx.stroke();
+      return new THREE.CanvasTexture(canvas);
+    }
+  </script>
+</body>
+</html>
